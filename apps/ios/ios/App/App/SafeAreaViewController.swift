@@ -5,16 +5,20 @@ import Capacitor
 /// area (status bar / Dynamic Island at the top, home indicator at the
 /// bottom, notch edges in landscape).
 ///
-/// The stock Capacitor controller stretches the webview edge-to-edge and
-/// relies on the page's `env(safe-area-inset-*)` CSS to pad content back
-/// inside — which the Hermes renderer (a desktop-first app full of
-/// fixed-position chrome) can't honour reliably, leaving the titlebar
-/// buttons unreachable behind the clock/battery. Constraining the webview
-/// natively is deterministic: the page simply never extends under system UI.
+/// In Capacitor, `loadView()` makes the webview ITSELF the controller's root
+/// view (`view = webView`), and a root view is always pinned to the full
+/// window by UIKit — it cannot be inset in place (constraining it to its own
+/// safe-area guide is a no-op, and re-framing it against itself shrinks it
+/// recursively). So this controller re-parents: a plain container becomes the
+/// root view, the webview moves inside it, pinned to the container's
+/// safe-area layout guide. The uncovered bands show the container's
+/// background, kept in sync with the system light/dark appearance to match
+/// the app theme's boot background (#f7f7f7 / #111111).
 ///
-/// The uncovered bands show this controller's view background, kept in sync
-/// with the system light/dark appearance to match the app theme's boot
-/// background (#f7f7f7 / #111111).
+/// The page-side CSS in apps/desktop/src/ios/ios.css keeps its own
+/// env(safe-area-inset-*) handling as a fallback; with the webview confined
+/// here those insets are all 0, so the two layers compose instead of
+/// double-insetting.
 class SafeAreaViewController: CAPBridgeViewController {
 
     private static let themeBackground = UIColor { trait in
@@ -24,35 +28,28 @@ class SafeAreaViewController: CAPBridgeViewController {
     }
 
     override func viewDidLoad() {
+        // Runs after loadView(), so `view === webView` at this point and the
+        // web content is already loading.
         super.viewDidLoad()
 
-        view.backgroundColor = Self.themeBackground
-
-        if let webView = self.webView {
-            webView.backgroundColor = Self.themeBackground
-            webView.scrollView.backgroundColor = Self.themeBackground
-            // Frame-driven layout below; flexible autoresizing would fight it
-            // on rotation.
-            webView.autoresizingMask = []
-        }
-    }
-
-    // Enforce the safe-area frame on EVERY layout pass (initial load, safe
-    // area becoming known, rotations, size-class changes). Frame assignment
-    // beats Auto Layout constraints here: Capacitor owns the webview and
-    // re-frames it to the full bounds itself, so a one-shot constraint setup
-    // can be silently overridden — this cannot.
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-
-        guard let webView = self.webView else {
+        guard let webView = self.webView, view === webView else {
             return
         }
 
-        let target = view.safeAreaLayoutGuide.layoutFrame
+        let container = UIView(frame: webView.bounds)
+        container.backgroundColor = Self.themeBackground
 
-        if !target.isEmpty && webView.frame != target {
-            webView.frame = target
-        }
+        view = container
+        container.addSubview(webView)
+
+        webView.backgroundColor = Self.themeBackground
+        webView.scrollView.backgroundColor = Self.themeBackground
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.trailingAnchor)
+        ])
     }
 }
