@@ -981,7 +981,18 @@ const bridge: Window['hermesDesktop'] = {
         return true
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        lastNotifyDiagnostic = `LocalNotifications.${step} failed: ${message || 'unknown native error'}.`
+
+        // UNErrorDomain error 1 = UNErrorCodeNotificationsNotAllowed: iOS
+        // refused the registration itself. Inside app-container hosts
+        // (LiveContainer) this is structural — the guest app's bundle id is
+        // not a real installed app, so the OS rejects it no matter what the
+        // Settings toggle says. Only a real (signed) install can fix it.
+        lastNotifyDiagnostic = message.includes('UNErrorDomain error 1')
+          ? `LocalNotifications.${step} failed: iOS refused notification registration (UNErrorDomain error 1). ` +
+            'This is a limitation of running inside an app container like LiveContainer — the hosted app is not ' +
+            'a real installed app, so iOS rejects its notification requests regardless of the Settings toggle. ' +
+            'Installing the IPA as a real app (AltStore / Sideloadly signing) makes notifications work.'
+          : `LocalNotifications.${step} failed: ${message || 'unknown native error'}.`
         log(`local notification failed: ${lastNotifyDiagnostic}`)
 
         return false
