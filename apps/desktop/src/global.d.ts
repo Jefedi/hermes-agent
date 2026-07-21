@@ -86,6 +86,10 @@ declare global {
       }
       api: <T>(request: HermesApiRequest) => Promise<T>
       notify: (payload: HermesNotification) => Promise<boolean>
+      // Human-readable record of the last notify() attempt (gateway-only iOS
+      // shell). The notifications settings' test button appends it to the
+      // result toast so a silent failure explains itself on screen.
+      notifyDiagnostics?: () => Promise<string>
       requestMicrophoneAccess: () => Promise<boolean>
       readFileDataUrl: (filePath: string) => Promise<string>
       readFileText: (filePath: string) => Promise<HermesReadFileTextResult>

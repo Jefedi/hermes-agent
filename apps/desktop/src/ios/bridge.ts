@@ -182,6 +182,12 @@ function createEmitter<T>() {
 
 const connectionApplied = createEmitter<void>()
 
+// Step-by-step record of the LAST notify() attempt, surfaced by the
+// notifications settings' test button so a silent false has an on-screen
+// explanation (permission state, plugin error, missing bridge) instead of
+// the generic "not supported" copy.
+let lastNotifyDiagnostic = 'No notification attempt has been made yet.'
+
 // ---------------------------------------------------------------------------
 // REST plumbing.
 // ---------------------------------------------------------------------------
@@ -933,19 +939,28 @@ const bridge: Window['hermesDesktop'] = {
       const call = <T>(method: string, options?: unknown) =>
         capacitor.nativePromise!<T>('LocalNotifications', method, options)
 
+      let step = 'checkPermissions'
+
       try {
         let permission = await call<{ display: string }>('checkPermissions')
+        const initialState = permission.display
 
         if (permission.display === 'prompt' || permission.display === 'prompt-with-rationale') {
+          step = 'requestPermissions'
           permission = await call<{ display: string }>('requestPermissions')
         }
 
         if (permission.display !== 'granted') {
-          log('local notification skipped: permission not granted')
+          lastNotifyDiagnostic =
+            `Notification permission is "${permission.display}" (started as "${initialState}"). ` +
+            'iOS is blocking notifications for the app that hosts Hermes: open iOS Settings → Notifications, ' +
+            'find the host app (e.g. LiveContainer), and enable Allow Notifications — then retry.'
+          log(`local notification skipped: ${lastNotifyDiagnostic}`)
 
           return false
         }
 
+        step = 'schedule'
         await call('schedule', {
           notifications: [
             {
@@ -958,9 +973,16 @@ const bridge: Window['hermesDesktop'] = {
           ]
         })
 
+        lastNotifyDiagnostic =
+          'Native notification scheduled (permission granted). If no banner appeared while the app was open, ' +
+          'the host app is suppressing foreground banners — check the iOS Notification Center, or background ' +
+          'Hermes before the next alert fires.'
+
         return true
       } catch (error) {
-        log(`local notification failed: ${error instanceof Error ? error.message : String(error)}`)
+        const message = error instanceof Error ? error.message : String(error)
+        lastNotifyDiagnostic = `LocalNotifications.${step} failed: ${message || 'unknown native error'}.`
+        log(`local notification failed: ${lastNotifyDiagnostic}`)
 
         return false
       }
@@ -968,17 +990,25 @@ const bridge: Window['hermesDesktop'] = {
 
     // Browser fallback (dev/preview outside the native shell).
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+      lastNotifyDiagnostic =
+        'The Capacitor native bridge is not available (running outside the iOS shell) and the browser ' +
+        `Notification API is ${typeof Notification === 'undefined' ? 'missing' : 'not granted'}.`
+
       return false
     }
 
     try {
       new Notification(payload.title || 'Hermes', { body: payload.body || '', silent: Boolean(payload.silent) })
+      lastNotifyDiagnostic = 'Browser notification shown (web fallback).'
 
       return true
-    } catch {
+    } catch (error) {
+      lastNotifyDiagnostic = `Browser notification failed: ${error instanceof Error ? error.message : String(error)}`
+
       return false
     }
   },
+  notifyDiagnostics: async () => lastNotifyDiagnostic,
   requestMicrophoneAccess: async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })

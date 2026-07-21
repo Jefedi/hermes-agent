@@ -36,7 +36,15 @@ export function NotificationsSettings() {
   const runTest = async () => {
     triggerHaptic('open')
     const ok = await sendTestNativeNotification(copy.testTitle, copy.testBody)
-    notify({ kind: ok ? 'info' : 'error', message: ok ? copy.testSent : copy.testUnsupported })
+    // Gateway-only (iOS) shells record WHY an attempt failed (permission
+    // state, plugin error) — surface that instead of the generic copy so the
+    // failure is actionable from the screen. Absent on desktop bridges.
+    const diagnostic = await window.hermesDesktop?.notifyDiagnostics?.().catch(() => null)
+    notify({
+      kind: ok ? 'info' : 'error',
+      message: ok ? copy.testSent : diagnostic || copy.testUnsupported,
+      ...(ok || !diagnostic ? {} : { durationMs: 0 })
+    })
   }
 
   return (
