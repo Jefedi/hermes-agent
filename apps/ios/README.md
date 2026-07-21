@@ -1,4 +1,6 @@
 # Hermes iOS ☤
+<!-- Build note: notifications ride @capacitor/local-notifications; the bottom
+     statusbar is a horizontal touch scroller on phones. -->
 
 The iOS shell for [Hermes Desktop](../desktop/README.md), built with
 [Capacitor](https://capacitorjs.com). It wraps the same React renderer as the
