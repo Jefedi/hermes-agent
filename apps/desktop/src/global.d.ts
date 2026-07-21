@@ -12,6 +12,10 @@ export {}
 declare global {
   interface Window {
     hermesDesktop: {
+      // True when this bridge only supports the remote-gateway connection mode
+      // (the iOS/mobile shell). The settings UI hides the Local/Cloud mode
+      // cards and recovery surfaces skip local-backend actions when set.
+      gatewayOnly?: boolean
       // Resolve a backend connection. Omit `profile` (or pass the primary) for
       // the window's backend; pass a named profile to lazily spawn/reuse that
       // profile's backend from the pool.
@@ -44,7 +48,8 @@ declare global {
       // The pop-out pet overlay: a transparent always-on-top window hosting only
       // the mascot. The main renderer drives it (open/close/drag + state push);
       // the overlay sends control messages back (pop-in, composer submit).
-      petOverlay: {
+      // Absent on shells without multi-window support (iOS).
+      petOverlay?: {
         open: (request: PetOverlayOpenRequest) => Promise<{ ok: boolean; bounds?: PetOverlayBounds }>
         close: () => Promise<{ ok: boolean }>
         setBounds: (bounds: PetOverlayBounds) => void
@@ -64,8 +69,8 @@ declare global {
       oauthLoginConnectionConfig: (remoteUrl: string) => Promise<DesktopOauthLoginResult>
       oauthLogoutConnectionConfig: (remoteUrl?: string) => Promise<DesktopOauthLogoutResult>
       // Hermes Cloud: one portal login powers discovery + silent per-agent
-      // sign-in (cloud-auto-discovery Phase 3).
-      cloud: {
+      // sign-in (cloud-auto-discovery Phase 3). Absent on gateway-only shells.
+      cloud?: {
         status: () => Promise<DesktopCloudStatus>
         login: () => Promise<DesktopCloudStatus & { ok: boolean }>
         logout: () => Promise<DesktopCloudStatus & { ok: boolean }>
@@ -177,7 +182,8 @@ declare global {
         // Repo-first discovery: scan bounded roots for git repos (depth-capped).
         scanRepos: (roots: string[], options?: { maxDepth?: number }) => Promise<{ root: string; label: string }[]>
       }
-      terminal: {
+      // Local node-pty terminal. Absent on shells without a local shell (iOS).
+      terminal?: {
         /** Best-effort current working directory of the live PTY child (POSIX
          *  only; null on Windows or when unavailable). Used to reopen a tab
          *  where the user last `cd`'d. */
@@ -212,18 +218,18 @@ declare global {
       onBootstrapEvent: (callback: (payload: DesktopBootstrapEvent) => void) => () => void
       getVersion: () => Promise<DesktopVersionInfo>
       getRemoteDisplayReason?: () => Promise<string | null>
-      updates: {
+      updates?: {
         check: () => Promise<DesktopUpdateStatus>
         apply: (opts?: DesktopUpdateApplyOptions) => Promise<DesktopUpdateApplyResult>
         getBranch: () => Promise<{ branch: string }>
         setBranch: (name: string) => Promise<{ branch: string }>
         onProgress: (callback: (payload: DesktopUpdateProgress) => void) => () => void
       }
-      uninstall: {
+      uninstall?: {
         summary: () => Promise<DesktopUninstallSummary>
         run: (mode: DesktopUninstallMode) => Promise<DesktopUninstallResult>
       }
-      themes: {
+      themes?: {
         // Download a VS Code Marketplace extension and return the raw color
         // theme files it contributes. The renderer converts + persists them.
         fetchMarketplace: (id: string) => Promise<DesktopMarketplaceThemeResult>

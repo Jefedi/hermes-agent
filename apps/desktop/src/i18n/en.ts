@@ -98,6 +98,7 @@ export const en: Translations = {
         `Signs out of the saved remote browser session, then opens ${signInLabel}. Use local gateway to switch to the bundled backend instead.`,
       signOutAndSignIn: 'Sign out & sign in',
       remoteFailureHint: 'Check the gateway URL and sign-in under Gateway settings, or switch to the local gateway.',
+      remoteFailureHintGatewayOnly: 'Check the gateway URL, token, and sign-in under Gateway settings.',
       hideRecentLogs: 'Hide recent logs',
       showRecentLogs: 'Show recent logs',
       signedInTitle: 'Signed in',

@@ -140,6 +140,7 @@ export interface Translations {
       remoteSignInHint: (signInLabel: string) => string
       signOutAndSignIn: string
       remoteFailureHint: string
+      remoteFailureHintGatewayOnly: string
       hideRecentLogs: string
       showRecentLogs: string
       signedInTitle: string

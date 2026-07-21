@@ -121,6 +121,9 @@ function ScopeChip({ active, label, onSelect }: { active: boolean; label: string
 export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n()
   const g = t.settings.gateway
+  // Gateway-only shells (iOS) have no local backend and no Hermes Cloud login
+  // window: only the remote card renders, and the saved mode is always remote.
+  const gatewayOnly = Boolean(window.hermesDesktop?.gatewayOnly)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -131,7 +134,9 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
   const [connectedCloudUrl, setConnectedCloudUrl] = useState('')
 
   const acceptSavedConfig = (config: GatewaySettingsState) => {
-    setState(config)
+    // A gateway-only bridge can only persist remote configs, but guard anyway
+    // so a stale saved mode can never strand the UI on a hidden card.
+    setState(gatewayOnly ? { ...config, mode: 'remote' } : config)
     setConnectedCloudUrl(savedCloudConnectionUrl(config))
   }
 
@@ -770,23 +775,27 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
         <div className="text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-text-secondary)">
           {g.modeTitle}
         </div>
-        <div className="grid auto-rows-fr grid-cols-1 gap-2 min-[42rem]:grid-cols-3">
-          <ModeCard
-            active={state.mode === 'local'}
-            description={g.localDesc}
-            disabled={state.envOverride}
-            icon={Monitor}
-            onSelect={() => setState(current => ({ ...current, mode: 'local' }))}
-            title={g.localTitle}
-          />
-          <ModeCard
-            active={state.mode === 'cloud'}
-            description={g.cloudDesc}
-            disabled={state.envOverride}
-            icon={Cloud}
-            onSelect={() => setState(current => ({ ...current, mode: 'cloud' }))}
-            title={g.cloudTitle}
-          />
+        <div className={cn('grid auto-rows-fr grid-cols-1 gap-2', !gatewayOnly && 'min-[42rem]:grid-cols-3')}>
+          {gatewayOnly ? null : (
+            <ModeCard
+              active={state.mode === 'local'}
+              description={g.localDesc}
+              disabled={state.envOverride}
+              icon={Monitor}
+              onSelect={() => setState(current => ({ ...current, mode: 'local' }))}
+              title={g.localTitle}
+            />
+          )}
+          {gatewayOnly ? null : (
+            <ModeCard
+              active={state.mode === 'cloud'}
+              description={g.cloudDesc}
+              disabled={state.envOverride}
+              icon={Cloud}
+              onSelect={() => setState(current => ({ ...current, mode: 'cloud' }))}
+              title={g.cloudTitle}
+            />
+          )}
           <ModeCard
             active={state.mode === 'remote'}
             description={g.remoteDesc}

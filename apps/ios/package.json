@@ -1,0 +1,19 @@
+{
+  "name": "hermes-ios",
+  "private": true,
+  "version": "0.17.0",
+  "description": "iOS (Capacitor) shell for Hermes Desktop in remote-gateway-only mode.",
+  "author": "Nous Research",
+  "scripts": {
+    "build:web": "npm run --prefix ../desktop build:ios",
+    "sync": "cap sync ios",
+    "open": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.4.4",
+    "@capacitor/ios": "^7.4.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.4"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "appId": "com.nousresearch.hermes.gateway",
+  "appName": "Hermes",
+  "webDir": "../desktop/dist-ios",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#111111",
+    "allowsLinkPreview": false
+  }
+}

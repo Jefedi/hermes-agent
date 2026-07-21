@@ -96,6 +96,7 @@ export const zh: Translations = {
         `先退出已保存的远程浏览器会话，然后打开${signInLabel}。也可以使用本地网关切换到随应用提供的后端。`,
       signOutAndSignIn: '退出并重新登录',
       remoteFailureHint: '在“网关设置”中检查网关 URL 和登录，或切换到本地网关。',
+      remoteFailureHintGatewayOnly: '在“网关设置”中检查网关 URL、令牌和登录。',
       hideRecentLogs: '隐藏最近日志',
       showRecentLogs: '显示最近日志',
       signedInTitle: '已登录',

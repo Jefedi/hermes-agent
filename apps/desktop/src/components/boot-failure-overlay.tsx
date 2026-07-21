@@ -102,7 +102,10 @@ export function BootFailureOverlay() {
         return
       }
 
-      setRemoteFailure(isRemoteConfig(config))
+      // Gateway-only shells (iOS) have no local backend, so every boot failure
+      // is remote-shaped — including the unconfigured first run, where
+      // isRemoteConfig() is false only because no URL is saved yet.
+      setRemoteFailure(isRemoteConfig(config) || Boolean(window.hermesDesktop?.gatewayOnly))
 
       if (!isRemoteReauthFailure(config, boot.error)) {
         return
@@ -238,6 +241,9 @@ export function BootFailureOverlay() {
 
   let actions: RecoveryAction[]
   let hint: string
+  // Gateway-only shells (iOS) have no local backend: "Use local gateway" is a
+  // dead end there, so recovery keeps only the remote-shaped actions.
+  const gatewayOnly = Boolean(window.hermesDesktop?.gatewayOnly)
 
   if (remoteReauth) {
     actions = [
@@ -249,12 +255,12 @@ export function BootFailureOverlay() {
         busy: 'signin'
       },
       { ...settingsAction, variant: 'secondary' },
-      localAction
+      ...(gatewayOnly ? [] : [localAction])
     ]
     hint = copy.remoteSignInHint(label)
   } else if (remoteFailure) {
-    actions = [settingsAction, { ...retryAction, variant: 'secondary' }, localAction]
-    hint = copy.remoteFailureHint
+    actions = [settingsAction, { ...retryAction, variant: 'secondary' }, ...(gatewayOnly ? [] : [localAction])]
+    hint = gatewayOnly ? copy.remoteFailureHintGatewayOnly : copy.remoteFailureHint
   } else {
     // Local failure: Use-local is redundant with Retry (both re-target local), so
     // it's dropped here; keep it for remote failures where it's the fall-back.

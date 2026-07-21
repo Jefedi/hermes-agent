@@ -96,6 +96,7 @@ export const zhHant = defineLocale({
         `先登出已儲存的遠端瀏覽器工作階段，然後開啟${signInLabel}。使用本機閘道可切換至內建後端。`,
       signOutAndSignIn: '登出並重新登入',
       remoteFailureHint: '在「閘道設定」中檢查閘道 URL 與登入，或切換至本機閘道。',
+      remoteFailureHintGatewayOnly: '在「閘道設定」中檢查閘道 URL、權杖與登入。',
       hideRecentLogs: '隱藏最近記錄',
       showRecentLogs: '顯示最近記錄',
       signedInTitle: '已登入',

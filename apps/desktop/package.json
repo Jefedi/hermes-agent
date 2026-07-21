@@ -21,6 +21,7 @@
     "start": "npm run build && electron .",
     "prebuild": "tsc -b . --clean",
     "build": "node scripts/assert-root-install.mjs && node scripts/write-build-stamp.mjs && vite build && node scripts/bundle-electron-main.mjs && node scripts/stage-native-deps.mjs",
+    "build:ios": "node scripts/assert-root-install.mjs && vite build --config vite.ios.config.ts",
     "postbuild": "node scripts/assert-dist-built.mjs",
     "prebuilder": "node scripts/patch-electron-builder-mac-binary.mjs",
     "builder": "cross-env NODE_OPTIONS=--max-old-space-size=16384 node scripts/run-electron-builder.mjs",

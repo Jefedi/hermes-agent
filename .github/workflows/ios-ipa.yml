@@ -1,0 +1,92 @@
+name: iOS IPA
+
+# Builds the Hermes iOS app (remote-gateway-only shell around the desktop
+# renderer, see apps/ios) into an UNSIGNED .ipa and uploads it as a workflow
+# artifact. Unsigned on purpose: the artifact is meant for sideloading
+# (AltStore / Sideloadly / TrollStore and similar re-sign at install time).
+#
+# Trigger it manually from the Actions tab (workflow_dispatch), or push to a
+# branch and it runs when iOS-relevant paths change.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/ios/**"
+      - "apps/desktop/src/**"
+      - "apps/desktop/ios.html"
+      - "apps/desktop/vite.ios.config.ts"
+      - "apps/shared/**"
+      - ".github/workflows/ios-ipa.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Workspace install. The Electron binary and Playwright browsers are
+      # useless for this job — skip their postinstall downloads.
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          command: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Build iOS web bundle
+        run: npm run --prefix apps/desktop build:ios
+
+      - name: Sync Capacitor iOS project
+        working-directory: apps/ios
+        run: npx cap sync ios
+
+      - name: Archive (unsigned)
+        working-directory: apps/ios/ios/App
+        run: |
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+      # An .ipa is just a zip with the .app under Payload/. Package it by hand
+      # since xcodebuild -exportArchive refuses to run without signing.
+      - name: Package IPA
+        run: |
+          APP_VERSION=$(node -p "require('./apps/ios/package.json').version")
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app" "$RUNNER_TEMP/Payload/"
+          (cd "$RUNNER_TEMP" && zip -qry "Hermes-$APP_VERSION-ios-unsigned.ipa" Payload)
+          mkdir -p dist-ipa
+          mv "$RUNNER_TEMP/Hermes-$APP_VERSION-ios-unsigned.ipa" dist-ipa/
+          ls -lh dist-ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-ios-unsigned-ipa
+          path: dist-ipa/*.ipa
+          retention-days: 30
+          if-no-files-found: error
