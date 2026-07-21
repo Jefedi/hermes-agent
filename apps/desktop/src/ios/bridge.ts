@@ -912,35 +912,41 @@ const bridge: Window['hermesDesktop'] = {
   api: gatewayApi,
 
   notify: async (payload: HermesNotification) => {
-    // Native iOS local notifications via the Capacitor plugin (registered on
-    // window.Capacitor by the native shell — apps/desktop has no @capacitor
-    // dependency, so reach it dynamically). First use triggers the system
-    // permission prompt; a denied permission makes notify() report false so
-    // the renderer's "not supported" copy stays honest.
-    interface LocalNotificationsPlugin {
-      checkPermissions: () => Promise<{ display: string }>
-      requestPermissions: () => Promise<{ display: string }>
-      schedule: (options: {
-        notifications: { body: string; id: number; sound?: string; title: string }[]
-      }) => Promise<unknown>
-    }
+    // Native iOS local notifications through the CapacitorLocalNotifications
+    // pod. `Capacitor.Plugins.LocalNotifications` only exists when the
+    // plugin's JS package is imported by the bundle (registerPlugin), which
+    // this desktop-first bundle never does — so call the native side through
+    // the low-level `Capacitor.nativePromise(plugin, method, options)` the
+    // injected native-bridge always provides (the same seam CapacitorHttp's
+    // fetch patch uses). First use triggers the system permission prompt; a
+    // denied permission makes notify() report false so the renderer's "not
+    // supported" copy stays honest.
+    const capacitor = (
+      window as {
+        Capacitor?: {
+          nativePromise?: <T>(pluginName: string, methodName: string, options?: unknown) => Promise<T>
+        }
+      }
+    ).Capacitor
 
-    const plugins = (window as { Capacitor?: { Plugins?: Record<string, unknown> } }).Capacitor?.Plugins
-    const localNotifications = plugins?.LocalNotifications as LocalNotificationsPlugin | undefined
+    if (typeof capacitor?.nativePromise === 'function') {
+      const call = <T>(method: string, options?: unknown) =>
+        capacitor.nativePromise!<T>('LocalNotifications', method, options)
 
-    if (localNotifications) {
       try {
-        let permission = await localNotifications.checkPermissions()
+        let permission = await call<{ display: string }>('checkPermissions')
 
         if (permission.display === 'prompt' || permission.display === 'prompt-with-rationale') {
-          permission = await localNotifications.requestPermissions()
+          permission = await call<{ display: string }>('requestPermissions')
         }
 
         if (permission.display !== 'granted') {
+          log('local notification skipped: permission not granted')
+
           return false
         }
 
-        await localNotifications.schedule({
+        await call('schedule', {
           notifications: [
             {
               // Int32 range, unique enough for fire-and-forget alerts.
