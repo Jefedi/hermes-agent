@@ -28,18 +28,31 @@ class SafeAreaViewController: CAPBridgeViewController {
 
         view.backgroundColor = Self.themeBackground
 
+        if let webView = self.webView {
+            webView.backgroundColor = Self.themeBackground
+            webView.scrollView.backgroundColor = Self.themeBackground
+            // Frame-driven layout below; flexible autoresizing would fight it
+            // on rotation.
+            webView.autoresizingMask = []
+        }
+    }
+
+    // Enforce the safe-area frame on EVERY layout pass (initial load, safe
+    // area becoming known, rotations, size-class changes). Frame assignment
+    // beats Auto Layout constraints here: Capacitor owns the webview and
+    // re-frames it to the full bounds itself, so a one-shot constraint setup
+    // can be silently overridden — this cannot.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+
         guard let webView = self.webView else {
             return
         }
 
-        webView.backgroundColor = Self.themeBackground
-        webView.scrollView.backgroundColor = Self.themeBackground
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            webView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor)
-        ])
+        let target = view.safeAreaLayoutGuide.layoutFrame
+
+        if !target.isEmpty && webView.frame != target {
+            webView.frame = target
+        }
     }
 }

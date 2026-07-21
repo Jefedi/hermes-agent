@@ -40,6 +40,45 @@ body {
   min-height: 0;
 }
 
+/*
+ * The shell's root sizes itself with Tailwind's h-screen / w-screen
+ * (100vh / 100vw) — viewport units that IGNORE the body's safe-area padding,
+ * so on a full-bleed WebView the app still stretched under the status bar
+ * and home indicator. Clamp those utilities back inside the safe area.
+ * When the native shell already confines the WebView to the safe area
+ * (SafeAreaViewController), every env() inset is 0 and these resolve to
+ * plain 100dvh / 100vw — the two layers compose instead of double-insetting.
+ */
+.h-screen {
+  height: calc(100dvh - var(--ios-safe-top) - var(--ios-safe-bottom)) !important;
+}
+
+.w-screen {
+  width: calc(100vw - var(--ios-safe-left) - var(--ios-safe-right)) !important;
+}
+
+/*
+ * The titlebar control clusters ("Window controls" left, page tools middle,
+ * "App controls" right — src/app/shell/titlebar-controls.tsx) are
+ * position:fixed chrome anchored via --titlebar-controls-top /
+ * --titlebar-controls-left / --titlebar-tools-right, so neither the body
+ * padding nor the h-screen clamp moves them: on a full-bleed WebView they sat
+ * under the clock and battery, untappable. Nudge them into the safe area
+ * with margins (nothing else margins these fixed elements, and margins
+ * compose with every top/left/right formula the three variants use).
+ */
+[class*='--titlebar-controls-top'] {
+  margin-top: var(--ios-safe-top);
+}
+
+[class*='--titlebar-controls-left'] {
+  margin-left: var(--ios-safe-left);
+}
+
+[class*='--titlebar-tools-right'] {
+  margin-right: var(--ios-safe-right);
+}
+
 /* Quiet the default tap flash on every button/row; the app paints its own
  * pressed states. */
 * {
