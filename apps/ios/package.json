@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@capacitor/core": "^7.4.4",
-    "@capacitor/ios": "^7.4.4"
+    "@capacitor/ios": "^7.4.4",
+    "@capacitor/local-notifications": "^7.0.3"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.4"

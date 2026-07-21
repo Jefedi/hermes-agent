@@ -8,6 +8,9 @@
   "plugins": {
     "CapacitorHttp": {
       "enabled": true
+    },
+    "LocalNotifications": {
+      "presentationOptions": ["banner", "sound"]
     }
   },
   "ios": {

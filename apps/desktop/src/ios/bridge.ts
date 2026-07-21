@@ -912,6 +912,55 @@ const bridge: Window['hermesDesktop'] = {
   api: gatewayApi,
 
   notify: async (payload: HermesNotification) => {
+    // Native iOS local notifications via the Capacitor plugin (registered on
+    // window.Capacitor by the native shell — apps/desktop has no @capacitor
+    // dependency, so reach it dynamically). First use triggers the system
+    // permission prompt; a denied permission makes notify() report false so
+    // the renderer's "not supported" copy stays honest.
+    interface LocalNotificationsPlugin {
+      checkPermissions: () => Promise<{ display: string }>
+      requestPermissions: () => Promise<{ display: string }>
+      schedule: (options: {
+        notifications: { body: string; id: number; sound?: string; title: string }[]
+      }) => Promise<unknown>
+    }
+
+    const plugins = (window as { Capacitor?: { Plugins?: Record<string, unknown> } }).Capacitor?.Plugins
+    const localNotifications = plugins?.LocalNotifications as LocalNotificationsPlugin | undefined
+
+    if (localNotifications) {
+      try {
+        let permission = await localNotifications.checkPermissions()
+
+        if (permission.display === 'prompt' || permission.display === 'prompt-with-rationale') {
+          permission = await localNotifications.requestPermissions()
+        }
+
+        if (permission.display !== 'granted') {
+          return false
+        }
+
+        await localNotifications.schedule({
+          notifications: [
+            {
+              // Int32 range, unique enough for fire-and-forget alerts.
+              id: Date.now() % 2_147_483_647,
+              title: payload.title || 'Hermes',
+              body: payload.body || '',
+              ...(payload.silent ? {} : { sound: 'default' })
+            }
+          ]
+        })
+
+        return true
+      } catch (error) {
+        log(`local notification failed: ${error instanceof Error ? error.message : String(error)}`)
+
+        return false
+      }
+    }
+
+    // Browser fallback (dev/preview outside the native shell).
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
       return false
     }
