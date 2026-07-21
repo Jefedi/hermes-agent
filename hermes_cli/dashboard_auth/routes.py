@@ -15,6 +15,7 @@ The routes:
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -584,6 +585,104 @@ async def auth_logout(request: Request):
     clear_session_cookies(resp, prefix=prefix)
     clear_pkce_cookie(resp, prefix=prefix)
     return resp
+
+
+# ---------------------------------------------------------------------------
+# Auth-required: native-app connect (mobile shells)
+# ---------------------------------------------------------------------------
+
+# Return targets a native shell may name in ``?return=``. Only in-app WebView
+# origins — anything else silently falls back to the Capacitor default, so
+# this can never become an open redirect or leak the token to a foreign host.
+_APP_CONNECT_DEFAULT_RETURN = "capacitor://localhost/"
+_APP_CONNECT_RETURN_PREFIXES: tuple[str, ...] = (
+    "capacitor://localhost",
+    "ionic://localhost",
+    "http://localhost",
+    "http://127.0.0.1",
+)
+
+
+def _validated_app_return(raw: str) -> str:
+    """Validate a native shell's ``?return=`` target, defaulting to Capacitor.
+
+    Accepts only the known in-app WebView origins (optionally with a port
+    and/or a path), rejecting userinfo tricks like
+    ``capacitor://localhost@evil.example`` by re-parsing the authority.
+    """
+    from urllib.parse import urlsplit
+
+    value = (raw or "").strip()
+    if not value:
+        return _APP_CONNECT_DEFAULT_RETURN
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return _APP_CONNECT_DEFAULT_RETURN
+    if parts.scheme not in ("capacitor", "ionic", "http"):
+        return _APP_CONNECT_DEFAULT_RETURN
+    if parts.hostname not in ("localhost", "127.0.0.1") or parts.username or parts.password:
+        return _APP_CONNECT_DEFAULT_RETURN
+    if not value.startswith(_APP_CONNECT_RETURN_PREFIXES):
+        return _APP_CONNECT_DEFAULT_RETURN
+    return value
+
+
+@router.get("/app-connect", name="app_connect")
+async def app_connect(request: Request) -> HTMLResponse:
+    """Hand the native-app REST token to an authenticated top-level visit.
+
+    The mobile (iOS) shell cannot use the gated deploy's SameSite=Lax session
+    cookies from its ``capacitor://localhost`` origin, so it signs in by
+    navigating its WKWebView here: unauthenticated visits bounce through the
+    normal ``/login?next=/app-connect`` flow (cookies work fine on top-level
+    navigations), and the authenticated landing hands the process-lifetime
+    dashboard token back to the app in the URL FRAGMENT of an in-app redirect
+    (fragments never hit a server or its logs). The gate then accepts that
+    token via ``X-Hermes-Session-Token`` — see
+    ``middleware._native_token_session``.
+
+    Disabled (404) when ``app.state.native_client_token`` is empty
+    (HERMES_DASHBOARD_DISABLE_APP_CONNECT=1).
+    """
+    sess = getattr(request.state, "session", None)
+    if sess is None:
+        # The gate redirects unauthenticated HTML loads before we run; this
+        # is a defensive check for direct/loopback wiring.
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    token = getattr(request.app.state, "native_client_token", "") or ""
+    if not token:
+        raise HTTPException(status_code=404, detail="Native app connect is disabled.")
+
+    return_url = _validated_app_return(request.query_params.get("return", ""))
+    from urllib.parse import quote
+
+    target = f"{return_url}#hermes_app_token={quote(token, safe='')}"
+
+    audit_log(
+        AuditEvent.APP_CONNECT_TOKEN_ISSUED,
+        provider=sess.provider,
+        user_id=sess.user_id,
+        ip=_client_ip(request),
+    )
+
+    # A JS navigation (not an HTTP 302): WKWebView reliably follows
+    # script-initiated navigations to the app's custom scheme, whereas a
+    # server redirect from https:// to capacitor:// can be dropped. The
+    # manual link covers script-disabled edge cases.
+    import html as _html
+
+    safe_target = _html.escape(target, quote=True)
+    page = (
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        "<title>Hermes</title></head><body>"
+        "<p>Signed in. Returning to the Hermes app…</p>"
+        f"<p><a href=\"{safe_target}\">Open the Hermes app</a></p>"
+        f"<script>window.location.replace({json.dumps(target)})</script>"
+        "</body></html>"
+    )
+    return HTMLResponse(page)
 
 
 # ---------------------------------------------------------------------------

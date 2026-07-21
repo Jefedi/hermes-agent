@@ -264,7 +264,12 @@ async function fetchGatewayJson<T>(url: string, scope: StoredGatewayScope, optio
     body = JSON.stringify(options.body)
   }
 
-  if (scope.remoteAuthMode !== 'oauth') {
+  // Both auth modes present the session token header when one is held. For
+  // OAuth-gated gateways the token comes from the /app-connect handout (the
+  // gateway's SameSite=Lax cookies can never ride a cross-site fetch from
+  // this app origin); cookie credentials remain a fallback for the rare
+  // same-site embedding.
+  if (scope.remoteToken) {
     headers['X-Hermes-Session-Token'] = scope.remoteToken
   }
 
@@ -276,8 +281,7 @@ async function fetchGatewayJson<T>(url: string, scope: StoredGatewayScope, optio
       headers,
       body,
       signal: controller.signal,
-      // OAuth gateways authenticate REST via the HttpOnly session cookie.
-      credentials: scope.remoteAuthMode === 'oauth' ? 'include' : 'omit'
+      credentials: scope.remoteAuthMode === 'oauth' && !scope.remoteToken ? 'include' : 'omit'
     })
   } catch (error) {
     if (controller.signal.aborted) {
@@ -522,6 +526,12 @@ function setOauthConnected(rawUrl: string | undefined, connected: boolean) {
   const apply = (scope: StoredGatewayScope | null) => {
     if (scope && (!url || scope.remoteUrl === url)) {
       scope.remoteOauthConnected = connected
+
+      // Signing out of an OAuth scope also drops the /app-connect token —
+      // it's the session credential, not a user-entered value.
+      if (!connected && scope.remoteAuthMode === 'oauth') {
+        scope.remoteToken = ''
+      }
     }
   }
 
@@ -655,35 +665,23 @@ async function testConnectionConfig(payload: DesktopConnectionConfigInput): Prom
   return { ok: true, baseUrl, version: status?.version ? String(status.version) : null }
 }
 
-// OAuth sign-in without an Electron login window: open the gateway's /login
-// page externally, then poll /api/auth/me until the session cookie lands in
-// this WebView's cookie store (or we time out). Static-token gateways — the
-// common self-hosted `hermes serve` setup — are the primary supported path on
-// iOS; OAuth support depends on the login flow sharing cookies with the app.
+// OAuth sign-in without an Electron login window: navigate THIS WebView to
+// the gateway's /app-connect page. Unauthenticated visits bounce through the
+// normal /login flow (session cookies work on top-level navigations), and the
+// authenticated landing redirects back to the app origin with the gateway's
+// native-app token in the URL fragment — adopted by adoptAppConnectToken()
+// when the app reloads. Requires a gateway new enough to serve /app-connect.
 async function oauthLoginConnectionConfig(rawUrl: string): Promise<DesktopOauthLoginResult> {
   const baseUrl = normalizeRemoteBaseUrl(rawUrl)
 
-  window.open(`${baseUrl}/login`, '_blank')
+  localStorage.setItem(OAUTH_PENDING_KEY, baseUrl)
 
-  const deadline = Date.now() + 120_000
+  const returnUrl = `${window.location.origin}${window.location.pathname}`
+  window.location.assign(`${baseUrl}/app-connect?return=${encodeURIComponent(returnUrl)}`)
 
-  while (Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 2_000))
-
-    try {
-      const response = await fetch(`${baseUrl}/api/auth/me`, { credentials: 'include' })
-
-      if (response.ok) {
-        setOauthConnected(baseUrl, true)
-
-        return { ok: true, baseUrl, connected: true }
-      }
-    } catch {
-      // Keep polling until the deadline.
-    }
-  }
-
-  return { ok: true, baseUrl, connected: false }
+  // The page is navigating away; keep the caller's await suspended so the
+  // settings UI doesn't flash an "incomplete" state during the unload.
+  return new Promise<DesktopOauthLoginResult>(() => {})
 }
 
 async function oauthLogoutConnectionConfig(rawUrl?: string): Promise<DesktopOauthLogoutResult> {
@@ -694,13 +692,55 @@ async function oauthLogoutConnectionConfig(rawUrl?: string): Promise<DesktopOaut
     try {
       await fetch(`${url}/api/auth/logout`, { method: 'POST', credentials: 'include' })
     } catch {
-      // Best-effort: clearing the local connected flag is the important part.
+      // Best-effort: clearing the local token/flag is the important part.
     }
   }
 
   setOauthConnected(url ?? undefined, false)
 
   return { ok: true, connected: false }
+}
+
+// The /app-connect return trip: the gateway redirected back to the app origin
+// with `#hermes_app_token=…`. Adopt it into the pending OAuth scope (every
+// scope pointing at that gateway URL), then scrub the fragment before the
+// router mounts. Runs once at bridge install, BEFORE the app boots.
+const OAUTH_PENDING_KEY = 'hermes-ios-oauth-pending'
+
+function adoptAppConnectToken() {
+  const match = /[#&]hermes_app_token=([^&]+)/.exec(window.location.hash)
+
+  if (!match) {
+    return
+  }
+
+  const token = decodeURIComponent(match[1])
+  const pendingUrl = localStorage.getItem(OAUTH_PENDING_KEY)
+  localStorage.removeItem(OAUTH_PENDING_KEY)
+  history.replaceState(null, '', window.location.pathname + window.location.search)
+
+  if (!token || !pendingUrl) {
+    return
+  }
+
+  const config = readStoredConfig()
+
+  const apply = (scope: StoredGatewayScope | null) => {
+    if (scope && scope.remoteUrl === pendingUrl) {
+      scope.remoteAuthMode = 'oauth'
+      scope.remoteToken = token
+      scope.remoteOauthConnected = true
+    }
+  }
+
+  apply(config.global)
+
+  for (const name of Object.keys(config.profiles)) {
+    apply(config.profiles[name])
+  }
+
+  writeStoredConfig(config)
+  log(`app-connect token adopted for ${pendingUrl}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -720,7 +760,9 @@ async function getConnection(profile?: null | string): Promise<HermesConnection>
     authMode: scope.remoteAuthMode,
     nativeOverlayWidth: 0,
     source: 'settings',
-    token: scope.remoteAuthMode === 'oauth' ? '' : scope.remoteToken,
+    // OAuth scopes hold the /app-connect handout here; token scopes the
+    // user-entered session token. Either way it's the REST credential.
+    token: scope.remoteToken,
     // Fallback only — resolveGatewayWsUrl() always re-mints through
     // getGatewayWsUrl() before dialing.
     wsUrl: wsUrlFromBase(scope.remoteUrl, authParam),
@@ -1001,6 +1043,10 @@ const bridge: Window['hermesDesktop'] = {
   }),
   getRemoteDisplayReason: async () => null
 }
+
+// Pick up an /app-connect return (OAuth sign-in round trip) before the app
+// boots, so getConnection() already sees the adopted token.
+adoptAppConnectToken()
 
 window.hermesDesktop = bridge
 log('iOS gateway bridge installed')

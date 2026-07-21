@@ -2,6 +2,9 @@
   "appId": "com.nousresearch.hermes.gateway",
   "appName": "Hermes",
   "webDir": "../desktop/dist-ios",
+  "server": {
+    "allowNavigation": ["*"]
+  },
   "plugins": {
     "CapacitorHttp": {
       "enabled": true

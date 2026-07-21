@@ -35,9 +35,14 @@ session token (printed by the gateway on startup, or from
 `HERMES_DASHBOARD_SESSION_TOKEN`), **Test connection**, then **Save &
 reconnect**.
 
-Static-token gateways are the primary supported path. OAuth-gated gateways are
-best-effort: the login page opens externally and the app polls for the session
-cookie, which requires the login flow to share cookies with the app's WebView.
+OAuth-gated gateways (username/password or self-hosted OIDC) sign in
+**inside the app's WebView**: the Sign in button navigates to the gateway's
+`/app-connect` page, which bounces through the normal `/login` flow and then
+redirects back into the app with a native session token in the URL fragment.
+The gateway accepts that token via the `X-Hermes-Session-Token` header (see
+`hermes_cli/dashboard_auth` — disable with
+`HERMES_DASHBOARD_DISABLE_APP_CONNECT=1`). This requires the gateway to run a
+Hermes version that serves `/app-connect`.
 
 ## Building
 

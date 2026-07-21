@@ -16,7 +16,9 @@ binds.
 """
 from __future__ import annotations
 
+import hmac
 import logging
+import time
 from typing import Awaitable, Callable
 
 from fastapi import Request
@@ -88,6 +90,52 @@ def _client_ip(request: Request) -> str:
     if fwd:
         return fwd.split(",")[0].strip()
     return request.client.host if request.client else ""
+
+
+# Native-app (header-token) auth for gated binds.
+#
+# Browsers on a gated deploy authenticate with SameSite=Lax session cookies —
+# which a NATIVE client (the iOS shell's WKWebView, whose app origin is
+# ``capacitor://localhost``) can never attach to a cross-site fetch. Instead,
+# the ``/app-connect`` route hands the process-lifetime dashboard session
+# token to an already-cookie-authenticated top-level navigation, and the
+# native client presents it back on every REST call via the same
+# ``X-Hermes-Session-Token`` header loopback mode uses. WS upgrades are
+# unchanged: the native client mints single-use ``?ticket=`` values through
+# the (now header-authable) ``POST /api/auth/ws-ticket``.
+#
+# Scope guards:
+#   * only engages when ``app.state.native_client_token`` is set (start_server
+#     leaves it empty when HERMES_DASHBOARD_DISABLE_APP_CONNECT is on);
+#   * only ``/api/*`` paths — document navigations can't carry the header;
+#   * constant-time comparison, same as the loopback token check.
+_NATIVE_TOKEN_HEADER = "X-Hermes-Session-Token"
+
+
+def _native_token_session(request: Request):
+    """Return a synthetic Session for a valid native-app token, else None."""
+    if not request.url.path.startswith("/api/"):
+        return None
+    expected = getattr(request.app.state, "native_client_token", "") or ""
+    presented = request.headers.get(_NATIVE_TOKEN_HEADER, "")
+    if not expected or not presented:
+        return None
+    if not hmac.compare_digest(presented.encode(), expected.encode()):
+        return None
+    from hermes_cli.dashboard_auth.base import Session
+
+    return Session(
+        user_id="native-app",
+        email="",
+        display_name="Hermes native app",
+        org_id="",
+        provider="native-app-token",
+        # The credential is process-lifetime; the session object mirrors that
+        # by never expiring on its own clock.
+        expires_at=int(time.time()) + 24 * 60 * 60,
+        access_token="",
+        refresh_token="",
+    )
 
 
 def _ordered_session_providers(
@@ -296,6 +344,15 @@ async def gated_auth_middleware(
 
     path = request.url.path
     if _path_is_public(path):
+        return await call_next(request)
+
+    # Native-app header token (the /app-connect handout): a valid token is a
+    # full session equivalent for /api/* — attach a synthetic session so
+    # downstream handlers (`request.state.session` consumers like
+    # /api/auth/ws-ticket) work unchanged.
+    native_session = _native_token_session(request)
+    if native_session is not None:
+        request.state.session = native_session
         return await call_next(request)
 
     at, _rt = read_session_cookies(request)

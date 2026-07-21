@@ -19172,6 +19172,19 @@ def start_server(
     # banner, and enable uvicorn proxy_headers.
     app.state.auth_required = should_require_auth(host)
 
+    # Native-app connect (mobile shells): on a gated bind, /app-connect hands
+    # the process-lifetime session token to an authenticated top-level visit,
+    # and the gate accepts it back via X-Hermes-Session-Token (see
+    # dashboard_auth.middleware._native_token_session). Empty token = feature
+    # off — loopback binds don't need it (the legacy token path already
+    # works there), and operators can force it off with the env kill-switch.
+    app.state.native_client_token = (
+        _SESSION_TOKEN
+        if app.state.auth_required
+        and not env_var_enabled("HERMES_DASHBOARD_DISABLE_APP_CONNECT")
+        else ""
+    )
+
     # ``--insecure`` no longer disables the auth gate (June 2026 hardening:
     # the hermes-0day MCP-persistence campaign abused unauthenticated public
     # dashboards). If a caller still passes it, warn that it is now a no-op
