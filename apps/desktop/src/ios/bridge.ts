@@ -41,7 +41,9 @@ import type {
   HermesNotification,
   HermesPreviewTarget,
   HermesReadDirResult,
-  HermesReadFileTextResult
+  HermesReadFileTextResult,
+  HermesTerminalExit,
+  HermesTerminalSession
 } from '../global'
 
 // ---------------------------------------------------------------------------
@@ -363,16 +365,31 @@ async function gatewayApi<T>(request: HermesApiRequest): Promise<T> {
 // WebSocket URL resolution (token ?token= / OAuth single-use ?ticket=).
 // ---------------------------------------------------------------------------
 
-function wsUrlFromBase(baseUrl: string, authParam: readonly [string, string]): string {
+function wsUrlFromBase(baseUrl: string, authParam: readonly [string, string], path = '/api/ws'): string {
   const parsed = new URL(baseUrl)
 
   return buildHermesWebSocketUrl({
-    path: '/api/ws',
+    path,
     basePath: parsed.pathname.replace(/\/+$/, ''),
     authParam,
     protocol: parsed.protocol,
     host: parsed.host
   })
+}
+
+// Resolve an authed WS URL for any gateway endpoint (/api/ws, /api/pty, …).
+// Token gateways bake ?token=; OAuth gateways mint a fresh single-use
+// ?ticket= right before dialing. Returns null when token mode has no token.
+async function authedWsUrl(scope: StoredGatewayScope, path: string): Promise<null | string> {
+  if (scope.remoteAuthMode === 'oauth') {
+    return wsUrlFromBase(scope.remoteUrl, ['ticket', await mintWsTicket(scope)], path)
+  }
+
+  if (!scope.remoteToken) {
+    return null
+  }
+
+  return wsUrlFromBase(scope.remoteUrl, ['token', scope.remoteToken], path)
 }
 
 async function mintWsTicket(scope: StoredGatewayScope): Promise<string> {
@@ -458,6 +475,255 @@ function probeGatewayWebSocket(wsUrl: string, timeoutMs = 8_000): Promise<{ ok: 
       settle({ ok: false, reason: 'The WebSocket connection was rejected.' })
     }
   })
+}
+
+// ---------------------------------------------------------------------------
+// Remote terminal (the shell/TERMINAL pane).
+//
+// The desktop terminal drives a LOCAL node-pty shell over the Electron
+// `window.hermesDesktop.terminal` capability. iOS has no local shell, so this
+// implements the SAME interface (start/write/resize/onData/onExit/dispose)
+// against the gateway's PTY-over-WebSocket endpoint `/api/pty` — the same
+// transport the browser dashboard's terminal uses. The pane therefore shows
+// the REMOTE machine's Hermes TUI, driven from the phone.
+//
+// Wire protocol (mirrors hermes_cli/web_server.py::pty_ws):
+//   * bytes both directions — keystrokes up, PTY output down;
+//   * resize is an in-band escape `\x1b[RESIZE:<cols>;<rows>]` consumed by the
+//     server, never written to the child;
+//   * auth via the same ?token= / single-use ?ticket= query the main WS uses.
+// ---------------------------------------------------------------------------
+
+interface IosPtySession {
+  buffer: string[]
+  closed: boolean
+  cwd: string
+  dataListeners: Set<(payload: string) => void>
+  exitListeners: Set<(payload: HermesTerminalExit) => void>
+  flushed: boolean
+  shell: string
+  ws: WebSocket
+}
+
+const ptySessions = new Map<string, IosPtySession>()
+const ptyTextDecoder = typeof TextDecoder === 'function' ? new TextDecoder() : null
+
+function ptyResizeFrame(cols: number, rows: number): string {
+  return `[RESIZE:${Math.max(1, Math.floor(cols))};${Math.max(1, Math.floor(rows))}]`
+}
+
+function emitPtyData(session: IosPtySession, text: string) {
+  if (!text) {
+    return
+  }
+
+  // Nothing listening yet (start() resolves before the renderer attaches
+  // onData) — buffer so the TUI's first paint isn't lost.
+  if (session.dataListeners.size === 0) {
+    session.buffer.push(text)
+
+    return
+  }
+
+  for (const listener of [...session.dataListeners]) {
+    try {
+      listener(text)
+    } catch {
+      // A broken listener must not stall the stream.
+    }
+  }
+}
+
+function decodePtyMessage(data: unknown): string | null {
+  if (typeof data === 'string') {
+    return data
+  }
+
+  if (data instanceof ArrayBuffer && ptyTextDecoder) {
+    return ptyTextDecoder.decode(new Uint8Array(data))
+  }
+
+  return null
+}
+
+let ptySeq = 0
+
+async function startPtySession(options?: { cols?: number; cwd?: string; rows?: number }): Promise<HermesTerminalSession> {
+  const scope = requireScope()
+  const wsUrl = await authedWsUrl(scope, '/api/pty')
+
+  if (!wsUrl) {
+    throw new Error('No gateway session token is configured for the terminal.')
+  }
+
+  const id = `ios-pty-${++ptySeq}-${Date.now() % 100000}`
+
+  return new Promise<HermesTerminalSession>((resolve, reject) => {
+    let ws: WebSocket
+
+    try {
+      ws = new WebSocket(wsUrl)
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)))
+
+      return
+    }
+
+    ws.binaryType = 'arraybuffer'
+
+    const session: IosPtySession = {
+      buffer: [],
+      closed: false,
+      cwd: options?.cwd || '',
+      dataListeners: new Set(),
+      exitListeners: new Set(),
+      flushed: false,
+      shell: 'hermes',
+      ws
+    }
+
+    let opened = false
+
+    ws.onopen = () => {
+      opened = true
+      ptySessions.set(id, session)
+
+      // Send the initial size so the remote PTY matches the xterm viewport.
+      if (options?.cols && options?.rows) {
+        try {
+          ws.send(ptyResizeFrame(options.cols, options.rows))
+        } catch {
+          // Resize is best-effort; the first real fit() will retry.
+        }
+      }
+
+      resolve({ id, shell: session.shell, cwd: session.cwd })
+    }
+
+    ws.onmessage = event => {
+      const text = decodePtyMessage(event.data)
+
+      if (text !== null) {
+        emitPtyData(session, text)
+      }
+    }
+
+    ws.onerror = () => {
+      if (!opened) {
+        reject(new Error('Could not open the remote terminal WebSocket.'))
+      }
+    }
+
+    ws.onclose = event => {
+      session.closed = true
+      ptySessions.delete(id)
+
+      for (const listener of [...session.exitListeners]) {
+        try {
+          listener({ code: event.code || null, signal: null })
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!opened) {
+        reject(new Error(`The remote terminal closed before opening (code ${event.code}).`))
+      }
+    }
+  })
+}
+
+const iosTerminal: NonNullable<Window['hermesDesktop']['terminal']> = {
+  start: startPtySession,
+  write: async (id, data) => {
+    const session = ptySessions.get(id)
+
+    if (!session || session.closed || session.ws.readyState !== WebSocket.OPEN) {
+      return false
+    }
+
+    try {
+      session.ws.send(data)
+
+      return true
+    } catch {
+      return false
+    }
+  },
+  resize: async (id, size) => {
+    const session = ptySessions.get(id)
+
+    if (!session || session.closed || session.ws.readyState !== WebSocket.OPEN) {
+      return false
+    }
+
+    try {
+      session.ws.send(ptyResizeFrame(size.cols, size.rows))
+
+      return true
+    } catch {
+      return false
+    }
+  },
+  onData: (id, callback) => {
+    const session = ptySessions.get(id)
+
+    if (!session) {
+      return () => {}
+    }
+
+    session.dataListeners.add(callback)
+
+    // Flush anything that arrived before the renderer attached.
+    if (!session.flushed && session.buffer.length > 0) {
+      session.flushed = true
+      const pending = session.buffer.splice(0, session.buffer.length)
+
+      for (const chunk of pending) {
+        try {
+          callback(chunk)
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    return () => void session.dataListeners.delete(callback)
+  },
+  onExit: (id, callback) => {
+    const session = ptySessions.get(id)
+
+    if (!session) {
+      // Already gone — report an immediate exit on the next tick so the
+      // caller's cleanup runs.
+      queueMicrotask(() => callback({ code: null, signal: null }))
+
+      return () => {}
+    }
+
+    session.exitListeners.add(callback)
+
+    return () => void session.exitListeners.delete(callback)
+  },
+  dispose: async id => {
+    const session = ptySessions.get(id)
+
+    if (!session) {
+      return true
+    }
+
+    session.closed = true
+    ptySessions.delete(id)
+
+    try {
+      session.ws.close()
+    } catch {
+      // ignore
+    }
+
+    return true
+  },
+  cwd: async id => ptySessions.get(id)?.cwd || null
 }
 
 // ---------------------------------------------------------------------------
@@ -916,6 +1182,8 @@ const bridge: Window['hermesDesktop'] = {
   },
 
   api: gatewayApi,
+
+  terminal: iosTerminal,
 
   notify: async (payload: HermesNotification) => {
     // Native iOS local notifications through the CapacitorLocalNotifications
