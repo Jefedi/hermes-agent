@@ -384,6 +384,79 @@ function createEmitter<T>() {
 
 const connectionApplied = createEmitter<void>()
 
+// ---------------------------------------------------------------------------
+// Keep-awake (Screen Wake Lock) + wake/resume signal.
+//
+// iOS freezes a backgrounded WebView (timers stop, the WS drops). Two helpers
+// smooth the return: a screen wake lock keeps the display on during a long
+// turn (the renderer's Settings toggle drives setKeepAwake), and onPowerResume
+// gives the gateway-boot reconnect an extra nudge on foreground. The lock is
+// released by the OS whenever the page hides, so it's re-acquired on the next
+// visible transition while keep-awake stays on.
+// ---------------------------------------------------------------------------
+
+interface WakeLockSentinelLike {
+  addEventListener?: (type: 'release', listener: () => void) => void
+  release: () => Promise<void>
+}
+
+let wakeLockSentinel: WakeLockSentinelLike | null = null
+let keepAwakeWanted = false
+
+function wakeLockApi(): { request: (type: 'screen') => Promise<WakeLockSentinelLike> } | null {
+  const nav = navigator as Navigator & {
+    wakeLock?: { request: (type: 'screen') => Promise<WakeLockSentinelLike> }
+  }
+
+  return nav.wakeLock ?? null
+}
+
+async function acquireWakeLock(): Promise<void> {
+  if (!keepAwakeWanted || wakeLockSentinel || document.visibilityState !== 'visible') {
+    return
+  }
+
+  const api = wakeLockApi()
+
+  if (!api) {
+    return
+  }
+
+  try {
+    wakeLockSentinel = await api.request('screen')
+    wakeLockSentinel.addEventListener?.('release', () => {
+      wakeLockSentinel = null
+    })
+  } catch {
+    wakeLockSentinel = null
+  }
+}
+
+async function releaseWakeLock(): Promise<void> {
+  const sentinel = wakeLockSentinel
+  wakeLockSentinel = null
+
+  try {
+    await sentinel?.release()
+  } catch {
+    // Already released (e.g. by the OS on hide).
+  }
+}
+
+const powerResume = createEmitter<void>()
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Re-acquire the lock the OS dropped on hide, and nudge a reconnect.
+      void acquireWakeLock()
+      powerResume.emit()
+    }
+  })
+
+  window.addEventListener('pageshow', () => powerResume.emit())
+}
+
 // Step-by-step record of the LAST notify() attempt, surfaced by the
 // notifications settings' test button so a silent false has an on-screen
 // explanation (permission state, plugin error, missing bridge) instead of
@@ -1581,6 +1654,16 @@ const bridge: Window['hermesDesktop'] = {
   watchPreviewFile: async (url: string) => ({ id: `ios-${Date.now()}`, path: url }),
   stopPreviewFileWatch: async () => true,
 
+  setKeepAwake: (on: boolean) => {
+    keepAwakeWanted = on
+
+    if (on) {
+      void acquireWakeLock()
+    } else {
+      void releaseWakeLock()
+    }
+  },
+
   openExternal: async (url: string) => {
     window.open(url, '_blank')
   },
@@ -1624,6 +1707,7 @@ const bridge: Window['hermesDesktop'] = {
   onPreviewFileChanged: subscribeNoop,
   onBackendExit: subscribeNoop,
   onConnectionApplied: (callback: () => void) => connectionApplied.on(callback),
+  onPowerResume: (callback: () => void) => powerResume.on(callback),
   onBootProgress: subscribeNoop,
 
   getBootstrapState: async () => bootstrapState(),
