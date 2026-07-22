@@ -66,6 +66,9 @@ interface StoredGatewayConfig {
 const CONFIG_KEY = 'hermes-ios-gateway-config'
 const PROFILE_KEY = 'hermes-ios-active-profile'
 const PROJECT_DIR_KEY = 'hermes-ios-default-project-dir'
+// Mirror of the native biometric-lock preference for the settings toggle's UI
+// state (the native UserDefaults flag is the authority for the gate itself).
+const BIOMETRIC_LOCK_KEY = 'hermes-ios-biometric-lock'
 const DEFAULT_TIMEOUT_MS = 30_000
 
 // ---------------------------------------------------------------------------
@@ -1493,6 +1496,40 @@ const bridge: Window['hermesDesktop'] = {
       return true
     } catch {
       return false
+    }
+  },
+
+  biometric: {
+    getAvailability: async () => {
+      const info = (window as { __hermesBiometric?: { available?: boolean; biometryType?: string; enabled?: boolean } })
+        .__hermesBiometric
+
+      return {
+        available: Boolean(info?.available),
+        biometryType: typeof info?.biometryType === 'string' ? info.biometryType : 'none',
+        enabled: Boolean(info?.enabled ?? localStorage.getItem(BIOMETRIC_LOCK_KEY) === '1')
+      }
+    },
+    setEnabled: async (enabled: boolean) => {
+      try {
+        const handler = (
+          window as { webkit?: { messageHandlers?: { hermesBiometric?: { postMessage: (msg: unknown) => void } } } }
+        ).webkit?.messageHandlers?.hermesBiometric
+
+        handler?.postMessage({ enabled })
+
+        const info = (window as { __hermesBiometric?: { enabled?: boolean } }).__hermesBiometric
+
+        if (info) {
+          info.enabled = enabled
+        }
+
+        localStorage.setItem(BIOMETRIC_LOCK_KEY, enabled ? '1' : '0')
+
+        return true
+      } catch {
+        return false
+      }
     }
   },
 

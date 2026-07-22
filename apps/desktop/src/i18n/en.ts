@@ -627,6 +627,8 @@ export const en: Translations = {
       diagnostics: 'Diagnostics',
       diagnosticsDesc: 'Reveal desktop.log in your file manager — useful when the gateway fails to start.',
       openLogs: 'Open logs',
+      biometricTitle: (method: string) => `Unlock with ${method}`,
+      biometricDesc: (method: string) => `Require ${method} each time you open Hermes, protecting your gateway session.`,
       incompleteTitle: 'Remote gateway incomplete',
       incompleteSignIn: 'Enter a remote URL and sign in before switching to remote.',
       incompleteToken: 'Enter a remote URL and session token before switching to remote.',

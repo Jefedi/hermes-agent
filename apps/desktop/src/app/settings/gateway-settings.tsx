@@ -14,7 +14,7 @@ import { notify, notifyError } from '@/store/notifications'
 import { $profiles, refreshActiveProfile } from '@/store/profile'
 
 import { CONTROL_TEXT } from './constants'
-import { EmptyState, ListRow, LoadingState, Pill, SettingsContent } from './primitives'
+import { EmptyState, ListRow, LoadingState, Pill, SettingsContent, ToggleRow } from './primitives'
 
 type Mode = 'local' | 'remote' | 'cloud'
 type AuthMode = 'oauth' | 'token'
@@ -46,6 +46,19 @@ const EMPTY_STATE: GatewaySettingsState = {
 
 export function savedCloudConnectionUrl(config: Pick<GatewaySettingsState, 'mode' | 'remoteUrl'>): string {
   return config.mode === 'cloud' ? config.remoteUrl.trim().replace(/\/+$/, '').toLowerCase() : ''
+}
+
+// Brand name for the device's biometry (never translated).
+function biometricMethodLabel(biometryType: string): string {
+  if (biometryType === 'faceID') {
+    return 'Face ID'
+  }
+
+  if (biometryType === 'touchID') {
+    return 'Touch ID'
+  }
+
+  return 'biometrics'
 }
 
 function ModeCard({
@@ -132,6 +145,30 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
   const [remoteToken, setRemoteToken] = useState('')
   const [lastTest, setLastTest] = useState<null | string>(null)
   const [connectedCloudUrl, setConnectedCloudUrl] = useState('')
+
+  // Biometric (Face ID / Touch ID) app lock — only surfaces on a gateway-only
+  // shell whose device actually has biometry enrolled.
+  const [biometric, setBiometric] = useState<{ available: boolean; biometryType: string; enabled: boolean }>({
+    available: false,
+    biometryType: 'none',
+    enabled: false
+  })
+
+  useEffect(() => {
+    if (!gatewayOnly) {
+      return
+    }
+
+    void window.hermesDesktop?.biometric
+      ?.getAvailability()
+      .then(setBiometric)
+      .catch(() => undefined)
+  }, [gatewayOnly])
+
+  const toggleBiometric = (enabled: boolean) => {
+    setBiometric(prev => ({ ...prev, enabled }))
+    void window.hermesDesktop?.biometric?.setEnabled(enabled).catch(() => undefined)
+  }
 
   const acceptSavedConfig = (config: GatewaySettingsState) => {
     // A gateway-only bridge can only persist remote configs, but guard anyway
@@ -1077,6 +1114,17 @@ export function GatewaySettings({ embedded = false }: { embedded?: boolean } = {
           </Button>
         </div>
       ) : null}
+
+      {embedded || !gatewayOnly || !biometric.available ? null : (
+        <div className="mt-6 grid gap-1">
+          <ToggleRow
+            checked={biometric.enabled}
+            description={g.biometricDesc(biometricMethodLabel(biometric.biometryType))}
+            label={g.biometricTitle(biometricMethodLabel(biometric.biometryType))}
+            onChange={toggleBiometric}
+          />
+        </div>
+      )}
 
       {embedded ? null : (
         <div className="mt-6 grid gap-1">

@@ -821,6 +821,8 @@ export const zh: Translations = {
       diagnostics: '诊断',
       diagnosticsDesc: '在文件管理器中显示 desktop.log，网关启动失败时很有用。',
       openLogs: '打开日志',
+      biometricTitle: (method: string) => `使用${method}解锁`,
+      biometricDesc: (method: string) => `每次打开 Hermes 时都要求${method}，保护你的网关会话。`,
       incompleteTitle: '远程网关配置不完整',
       incompleteSignIn: '切换到远程前，请输入远程 URL 并完成登录。',
       incompleteToken: '切换到远程前，请输入远程 URL 和会话 token。',

@@ -47,6 +47,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hermes uses the microphone for voice input and voice conversations.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Hermes uses Face ID to unlock the app and protect your gateway session.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- The app connects to a user-provided Hermes gateway URL. Plain-HTTP

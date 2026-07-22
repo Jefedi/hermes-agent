@@ -699,6 +699,8 @@ export const ja = defineLocale({
       diagnostics: '診断',
       diagnosticsDesc: 'ファイルマネージャーで desktop.log を表示します。ゲートウェイの起動に失敗した際に役立ちます。',
       openLogs: 'ログを開く',
+      biometricTitle: (method: string) => `${method}でロック解除`,
+      biometricDesc: (method: string) => `Hermes を開くたびに${method}を要求し、ゲートウェイセッションを保護します。`,
       incompleteTitle: 'リモートゲートウェイの設定が不完全です',
       incompleteSignIn: 'リモートに切り替える前にリモート URL を入力してサインインしてください。',
       incompleteToken: 'リモートに切り替える前にリモート URL とセッショントークンを入力してください。',

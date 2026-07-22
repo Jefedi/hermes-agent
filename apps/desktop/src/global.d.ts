@@ -90,6 +90,14 @@ declare global {
       // shell). The notifications settings' test button appends it to the
       // result toast so a silent failure explains itself on screen.
       notifyDiagnostics?: () => Promise<string>
+      // Optional biometric (Face ID / Touch ID) app lock — iOS shell only.
+      // `getAvailability` reports whether the device has biometry enrolled
+      // and whether the lock is currently on; `setEnabled` toggles it (and
+      // asks the native side to persist the choice).
+      biometric?: {
+        getAvailability: () => Promise<{ available: boolean; biometryType: string; enabled: boolean }>
+        setEnabled: (enabled: boolean) => Promise<boolean>
+      }
       requestMicrophoneAccess: () => Promise<boolean>
       readFileDataUrl: (filePath: string) => Promise<string>
       readFileText: (filePath: string) => Promise<HermesReadFileTextResult>

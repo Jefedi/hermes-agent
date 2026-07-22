@@ -678,6 +678,8 @@ export const zhHant = defineLocale({
       diagnostics: '診斷',
       diagnosticsDesc: '在檔案管理員中顯示 desktop.log，閘道啟動失敗時很有用。',
       openLogs: '開啟記錄',
+      biometricTitle: (method: string) => `使用${method}解鎖`,
+      biometricDesc: (method: string) => `每次開啟 Hermes 時都要求${method}，保護你的閘道工作階段。`,
       incompleteTitle: '遠端閘道設定不完整',
       incompleteSignIn: '切換至遠端前，請輸入遠端 URL 並完成登入。',
       incompleteToken: '切換至遠端前，請輸入遠端 URL 和工作階段 Token。',

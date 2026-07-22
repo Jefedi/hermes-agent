@@ -529,6 +529,8 @@ export interface Translations {
       saveAndReconnect: string
       diagnostics: string
       diagnosticsDesc: string
+      biometricTitle: (method: string) => string
+      biometricDesc: (method: string) => string
       openLogs: string
       incompleteTitle: string
       incompleteSignIn: string
