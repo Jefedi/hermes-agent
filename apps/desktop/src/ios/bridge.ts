@@ -103,6 +103,36 @@ function getNativePromise(): null | (<T>(plugin: string, method: string, options
   return typeof cap?.nativePromise === 'function' ? cap.nativePromise : null
 }
 
+// Cap every native Keychain call: a plugin that never calls back must not
+// leave a hung promise around (the hydrate runs in the background, but a
+// stalled call could otherwise wedge the migration forever).
+const SECURE_CALL_TIMEOUT_MS = 4_000
+
+function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
+  return new Promise<T>(resolve => {
+    let settled = false
+
+    const done = (value: T) => {
+      if (!settled) {
+        settled = true
+        resolve(value)
+      }
+    }
+
+    const timer = setTimeout(() => done(fallback), SECURE_CALL_TIMEOUT_MS)
+    promise.then(
+      value => {
+        clearTimeout(timer)
+        done(value)
+      },
+      () => {
+        clearTimeout(timer)
+        done(fallback)
+      }
+    )
+  })
+}
+
 async function secureSet(cacheKey: string, value: string): Promise<boolean> {
   const np = getNativePromise()
 
@@ -110,13 +140,10 @@ async function secureSet(cacheKey: string, value: string): Promise<boolean> {
     return false
   }
 
-  try {
-    await np('SecureStoragePlugin', 'set', { key: `${SECURE_TOKEN_KEY_PREFIX}${cacheKey}`, value })
-
-    return true
-  } catch {
-    return false
-  }
+  return withTimeout(
+    np('SecureStoragePlugin', 'set', { key: `${SECURE_TOKEN_KEY_PREFIX}${cacheKey}`, value }).then(() => true),
+    false
+  )
 }
 
 async function secureGet(cacheKey: string): Promise<null | string> {
@@ -126,16 +153,12 @@ async function secureGet(cacheKey: string): Promise<null | string> {
     return null
   }
 
-  try {
-    const result = await np<{ value?: string }>('SecureStoragePlugin', 'get', {
+  return withTimeout(
+    np<{ value?: string }>('SecureStoragePlugin', 'get', {
       key: `${SECURE_TOKEN_KEY_PREFIX}${cacheKey}`
-    })
-
-    return typeof result?.value === 'string' ? result.value : null
-  } catch {
-    // Rejects when the key is absent — treat as "no token".
-    return null
-  }
+    }).then(result => (typeof result?.value === 'string' ? result.value : null)),
+    null
+  )
 }
 
 async function secureRemove(cacheKey: string): Promise<void> {
@@ -1733,7 +1756,10 @@ adoptAppConnectToken()
 window.hermesDesktop = bridge
 log('iOS gateway bridge installed')
 
-// Migrate the session token into the iOS Keychain before the app boots. The
-// entry point (ios/main.tsx) awaits this so the first getConnection() already
-// reads the secured token. Resolves even on failure — never blocks startup.
-export const whenBridgeReady: Promise<void> = hydrateSecureTokens().catch(() => undefined)
+// Migrate the session token into the iOS Keychain in the BACKGROUND — never
+// gate boot on it. Until it completes the token is still read from
+// localStorage (the overlay cache is simply empty), so the first
+// getConnection() resolves either way. Gating startup on this async native
+// call risked a blank page if the Keychain call stalled inside a host
+// container (e.g. LiveContainer).
+void hydrateSecureTokens().catch(() => undefined)

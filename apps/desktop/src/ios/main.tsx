@@ -1,14 +1,15 @@
 /**
  * iOS entry point. Import order matters: the gateway bridge must install
- * `window.hermesDesktop` before any of the app's modules evaluate (several
- * stores read the bridge at module scope), so `./bridge` comes first.
+ * `window.hermesDesktop` (side effect of importing `./bridge`) before any of
+ * the app's modules evaluate — several stores read the bridge at module scope
+ * — so `./bridge` comes before `../main`.
+ *
+ * Boot is NOT gated on the Keychain token migration: that runs in the
+ * background from within `./bridge`, and until it completes the token is
+ * still read from localStorage, so the first connection resolves fine either
+ * way. (Gating boot on an async native call risked a blank page if the
+ * Keychain call ever stalled inside a host container.)
  */
 import './ios.css'
-
-import { whenBridgeReady } from './bridge'
-
-// Wait for the Keychain token migration to finish before booting, so the
-// first connection resolve already reads the secured token. `whenBridgeReady`
-// never rejects. Top-level await is supported by the ESM build target.
-await whenBridgeReady
-await import('../main')
+import './bridge'
+import '../main'
