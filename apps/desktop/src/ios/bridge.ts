@@ -68,24 +68,221 @@ const PROFILE_KEY = 'hermes-ios-active-profile'
 const PROJECT_DIR_KEY = 'hermes-ios-default-project-dir'
 const DEFAULT_TIMEOUT_MS = 30_000
 
+// ---------------------------------------------------------------------------
+// Secure token storage (iOS Keychain via capacitor-secure-storage-plugin).
+//
+// The session token is the one secret in the config. When the native Keychain
+// plugin is reachable the token lives THERE (accessible after-first-unlock,
+// this device), and localStorage keeps only non-secret fields (URL, auth
+// mode, flags). When the plugin is absent or unusable (browser/dev, older
+// shell), everything degrades to the original localStorage behavior — the
+// token is NEVER dropped. `secureTokens` is the in-memory source of truth for
+// (synchronous) reads once hydrated at startup; writes fan out to the
+// Keychain asynchronously.
+// ---------------------------------------------------------------------------
+
+const SECURE_TOKEN_KEY_PREFIX = 'hermes_gateway_token_'
+const GLOBAL_TOKEN_CACHE_KEY = '__global__'
+const secureTokens = new Map<string, string>()
+let secureStoreActive = false
+
+function tokenCacheKey(key: null | string): string {
+  return key || GLOBAL_TOKEN_CACHE_KEY
+}
+
+function getNativePromise(): null | (<T>(plugin: string, method: string, options?: unknown) => Promise<T>) {
+  const cap = (
+    window as {
+      Capacitor?: { nativePromise?: <T>(plugin: string, method: string, options?: unknown) => Promise<T> }
+    }
+  ).Capacitor
+
+  return typeof cap?.nativePromise === 'function' ? cap.nativePromise : null
+}
+
+async function secureSet(cacheKey: string, value: string): Promise<boolean> {
+  const np = getNativePromise()
+
+  if (!np) {
+    return false
+  }
+
+  try {
+    await np('SecureStoragePlugin', 'set', { key: `${SECURE_TOKEN_KEY_PREFIX}${cacheKey}`, value })
+
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function secureGet(cacheKey: string): Promise<null | string> {
+  const np = getNativePromise()
+
+  if (!np) {
+    return null
+  }
+
+  try {
+    const result = await np<{ value?: string }>('SecureStoragePlugin', 'get', {
+      key: `${SECURE_TOKEN_KEY_PREFIX}${cacheKey}`
+    })
+
+    return typeof result?.value === 'string' ? result.value : null
+  } catch {
+    // Rejects when the key is absent — treat as "no token".
+    return null
+  }
+}
+
+async function secureRemove(cacheKey: string): Promise<void> {
+  const np = getNativePromise()
+
+  if (!np) {
+    return
+  }
+
+  try {
+    await np('SecureStoragePlugin', 'remove', { key: `${SECURE_TOKEN_KEY_PREFIX}${cacheKey}` })
+  } catch {
+    // Best-effort.
+  }
+}
+
+// Overlay the Keychain-cached token onto a freshly-parsed config so every
+// existing `.remoteToken` reader sees the real secret. No-op (cache empty)
+// when the secure store is inactive.
+function overlaySecureTokens(config: StoredGatewayConfig) {
+  if (config.global) {
+    const token = secureTokens.get(GLOBAL_TOKEN_CACHE_KEY)
+
+    if (token !== undefined) {
+      config.global.remoteToken = token
+    }
+  }
+
+  for (const [name, scope] of Object.entries(config.profiles)) {
+    const token = secureTokens.get(name)
+
+    if (token !== undefined && scope) {
+      scope.remoteToken = token
+    }
+  }
+}
+
 function readStoredConfig(): StoredGatewayConfig {
+  let config: StoredGatewayConfig = { global: null, profiles: {} }
+
   try {
     const raw = localStorage.getItem(CONFIG_KEY)
 
     if (raw) {
       const parsed = JSON.parse(raw) as StoredGatewayConfig
-
-      return { global: parsed.global ?? null, profiles: parsed.profiles ?? {} }
+      config = { global: parsed.global ?? null, profiles: parsed.profiles ?? {} }
     }
   } catch {
     // Corrupt/absent config falls through to empty.
   }
 
-  return { global: null, profiles: {} }
+  overlaySecureTokens(config)
+
+  return config
+}
+
+// Route a scope's token to the Keychain + in-memory cache; empty clears it.
+function persistSecureToken(cacheKey: string, token: string) {
+  if (token) {
+    secureTokens.set(cacheKey, token)
+    void secureSet(cacheKey, token)
+  } else {
+    secureTokens.delete(cacheKey)
+    void secureRemove(cacheKey)
+  }
 }
 
 function writeStoredConfig(config: StoredGatewayConfig) {
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
+  if (!secureStoreActive) {
+    localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
+
+    return
+  }
+
+  // Secret goes to the Keychain; localStorage keeps a token-blanked copy.
+  const stripped: StoredGatewayConfig = {
+    global: config.global ? { ...config.global, remoteToken: '' } : null,
+    profiles: {}
+  }
+
+  if (config.global) {
+    persistSecureToken(GLOBAL_TOKEN_CACHE_KEY, config.global.remoteToken || '')
+  }
+
+  for (const [name, scope] of Object.entries(config.profiles)) {
+    persistSecureToken(name, scope.remoteToken || '')
+    stripped.profiles[name] = { ...scope, remoteToken: '' }
+  }
+
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(stripped))
+}
+
+// Startup migration: probe the Keychain, then move any localStorage tokens
+// into it (and load any tokens already stored there) before the app boots.
+// Resolves — never rejects — so a Keychain hiccup can't block startup.
+async function hydrateSecureTokens(): Promise<void> {
+  if (!getNativePromise()) {
+    // No native bridge (browser/dev): stay on localStorage tokens.
+    return
+  }
+
+  const canaryWritten = await secureSet('__canary__', '1')
+  const canaryRead = canaryWritten ? await secureGet('__canary__') : null
+  await secureRemove('__canary__')
+
+  if (canaryRead !== '1') {
+    log('secure token store unavailable; keeping tokens in localStorage')
+
+    return
+  }
+
+  secureStoreActive = true
+
+  // Read the RAW config (overlay is a no-op here — cache is still empty).
+  let raw: StoredGatewayConfig = { global: null, profiles: {} }
+
+  try {
+    const stored = localStorage.getItem(CONFIG_KEY)
+
+    if (stored) {
+      const parsed = JSON.parse(stored) as StoredGatewayConfig
+      raw = { global: parsed.global ?? null, profiles: parsed.profiles ?? {} }
+    }
+  } catch {
+    // fall through to empty
+  }
+
+  const loadScope = async (cacheKey: string, scope: null | StoredGatewayScope) => {
+    if (scope?.remoteToken) {
+      // Migrate an existing localStorage token into the Keychain.
+      await secureSet(cacheKey, scope.remoteToken)
+      secureTokens.set(cacheKey, scope.remoteToken)
+    } else {
+      const stored = await secureGet(cacheKey)
+
+      if (stored) {
+        secureTokens.set(cacheKey, stored)
+      }
+    }
+  }
+
+  await loadScope(GLOBAL_TOKEN_CACHE_KEY, raw.global)
+
+  for (const [name, scope] of Object.entries(raw.profiles)) {
+    await loadScope(name, scope)
+  }
+
+  // Rewrite localStorage without the secrets (secureStoreActive now strips).
+  writeStoredConfig(raw)
+  log('secure token store active (iOS Keychain)')
 }
 
 function scopeKey(profile?: null | string): null | string {
@@ -1415,4 +1612,7 @@ adoptAppConnectToken()
 window.hermesDesktop = bridge
 log('iOS gateway bridge installed')
 
-export {}
+// Migrate the session token into the iOS Keychain before the app boots. The
+// entry point (ios/main.tsx) awaits this so the first getConnection() already
+// reads the secured token. Resolves even on failure — never blocks startup.
+export const whenBridgeReady: Promise<void> = hydrateSecureTokens().catch(() => undefined)
