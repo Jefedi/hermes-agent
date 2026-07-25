@@ -1,9 +1,15 @@
-/*
- * iOS shell adjustments. The renderer's layout is already narrow-aware (both
- * sidebars auto-collapse into overlays below SIDEBAR_COLLAPSE_BREAKPOINT_PX),
- * so this file only handles what a phone WebView adds on top: safe-area
- * insets (notch / home indicator), touch behaviors, and viewport-height
- * quirks. Kept out of styles.css so the desktop build is untouched.
+/**
+ * ios.css — iOS shell adjustments (enhanced for mobile ergonomics).
+ *
+ * The renderer's layout is already narrow-aware (both sidebars auto-collapse
+ * into overlays below SIDEBAR_COLLAPSE_BREAKPOINT_PX). This file adds:
+ * - Safe-area insets (notch / home indicator)
+ * - Touch behaviors and viewport-height quirks
+ * - Mobile ergonomics: thumb-reach zones, tap targets, gesture affordances
+ * - Overlay panel styling (slide-in drawers instead of hover overlays)
+ * - Composer area: bottom-anchored, keyboard-aware
+ *
+ * Kept out of styles.css so the desktop build is untouched.
  */
 
 :root {
@@ -12,6 +18,15 @@
   --ios-safe-bottom: env(safe-area-inset-bottom, 0px);
   --ios-safe-left: env(safe-area-inset-left, 0px);
   --ios-safe-right: env(safe-area-inset-right, 0px);
+
+  /* Touch target minimum (Apple HIG: 44px, Material: 48px — split the difference) */
+  --ios-touch-min: 44px;
+
+  /* Overlay drawer width: 85% of viewport, capped at 320px */
+  --ios-drawer-width: min(85vw, 320px);
+
+  /* Composer safe-area + keyboard offset */
+  --ios-composer-offset: 0px;
 }
 
 html,
@@ -58,14 +73,8 @@ body {
 }
 
 /*
- * The titlebar control clusters ("Window controls" left, page tools middle,
- * "App controls" right — src/app/shell/titlebar-controls.tsx) are
- * position:fixed chrome anchored via --titlebar-controls-top /
- * --titlebar-controls-left / --titlebar-tools-right, so neither the body
- * padding nor the h-screen clamp moves them: on a full-bleed WebView they sat
- * under the clock and battery, untappable. Nudge them into the safe area
- * with margins (nothing else margins these fixed elements, and margins
- * compose with every top/left/right formula the three variants use).
+ * The titlebar control clusters are position:fixed chrome — nudge them into
+ * the safe area with margins so they stay tappable below the notch.
  */
 [class*='--titlebar-controls-top'] {
   margin-top: var(--ios-safe-top);
@@ -80,15 +89,12 @@ body {
 }
 
 /*
- * Bottom statusbar (src/app/shell/statusbar-controls.tsx): on a phone the
- * item row overflows and the desktop clips it (overflow-x-clip), hiding
- * information with no way to reach it. Make each cluster a horizontal touch
- * scroller (invisible scrollbar), keep items at their natural width instead
- * of truncating away, and give the bar a taller touch target than the
- * desktop's 20px.
+ * Bottom statusbar: make each cluster a horizontal touch scroller.
+ * Taller than desktop (28px vs 20px) for tappability.
  */
 [data-slot='statusbar'] {
   height: 1.75rem;
+  padding-bottom: var(--ios-safe-bottom);
 }
 
 [data-slot='statusbar'] > div {
@@ -105,17 +111,248 @@ body {
   flex-shrink: 0;
 }
 
-/* Quiet the default tap flash on every button/row; the app paints its own
- * pressed states. */
+/* Quiet the default tap flash on every button/row. */
 * {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Long-press on chrome (buttons, sidebar rows) should not trigger the OS
- * text-selection callout. Inputs/textareas/content keep normal selection. */
+/* Long-press on chrome should not trigger the OS text-selection callout. */
 button,
 [role='button'] {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* ==========================================================================
+   Mobile ergonomics: tap targets
+   ========================================================================== */
+
+/*
+ * Ensure all interactive elements meet the 44px minimum touch target.
+ * Applies to titlebar buttons, sidebar rows, and statusbar items.
+ * Uses min-height/min-width so content can grow beyond the floor.
+ */
+@media (max-width: 768px) {
+  /* Titlebar buttons: enlarge from 28px to 44px for thumb reach */
+  [class*='titlebar'] button[size='icon-titlebar'],
+  .titlebar-button {
+    min-width: var(--ios-touch-min) !important;
+    min-height: var(--ios-touch-min) !important;
+  }
+
+  /* Sidebar session rows: taller for touch */
+  [data-slot='sidebar-row'],
+  .sidebar-row {
+    min-height: var(--ios-touch-min) !important;
+  }
+
+  /* Composer: minimum 44px send/stop buttons, bottom-anchored */
+  .composer-bar button,
+  [data-slot='composer-send'] {
+    min-width: var(--ios-touch-min) !important;
+    min-height: var(--ios-touch-min) !important;
+  }
+
+  /* Settings rows: 44px minimum */
+  .settings-row,
+  [data-slot='settings-row'] {
+    min-height: var(--ios-touch-min) !important;
+  }
+}
+
+/* ==========================================================================
+   Mobile ergonomics: overlay drawers (sidebar + file browser)
+   ========================================================================== */
+
+/*
+ * On narrow viewports the sidebars become overlays. Style them as slide-in
+ * drawers with a scrim backdrop, matching the iOS native drawer pattern
+ * (like Apple Mail / Notes / ChatGPT iOS sidebar).
+ *
+ * The pane-shell tree already handles the reveal/collapse via
+ * PANE_TOGGLE_REVEAL_EVENT; these styles make the transition feel native.
+ */
+@media (max-width: 768px) {
+  /*
+   * Drawer container: fixed position, full height, slides in from the edge.
+   * Width is 85% of viewport (capped 320px) so the main content stays partially
+   * visible — giving the user spatial context (like iOS native drawers).
+   */
+  [data-pane-id='chat-sidebar'],
+  [data-pane-id='file-browser'] {
+    position: fixed !important;
+    top: var(--ios-safe-top) !important;
+    bottom: var(--ios-safe-bottom) !important;
+    width: var(--ios-drawer-width) !important;
+    z-index: 50 !important;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.3) !important;
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1) !important;
+    will-change: transform !important;
+  }
+
+  /* Sidebar slides from the left */
+  [data-pane-id='chat-sidebar'] {
+    left: var(--ios-safe-left) !important;
+    transform: translateX(-100%) !important;
+  }
+
+  [data-pane-id='chat-sidebar'][data-pane-revealed='true'] {
+    transform: translateX(0) !important;
+  }
+
+  /* File browser slides from the right */
+  [data-pane-id='file-browser'] {
+    right: var(--ios-safe-right) !important;
+    transform: translateX(100%) !important;
+  }
+
+  [data-pane-id='file-browser'][data-pane-revealed='true'] {
+    transform: translateX(0) !important;
+  }
+
+  /*
+   * Scrim overlay behind the drawer. The pane-shell may already render one;
+   * if not, this CSS creates a pseudo-element on the body when a drawer is open.
+   * Tapping the scrim closes the drawer (handled by the gesture layer).
+   */
+  body[data-ios-drawer-open='true']::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    top: var(--ios-safe-top);
+    bottom: var(--ios-safe-bottom);
+    left: var(--ios-safe-left);
+    right: var(--ios-safe-right);
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 49;
+    pointer-events: auto;
+    animation: ios-scrim-fade-in 0.2s ease-out;
+  }
+
+  @keyframes ios-scrim-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
+
+/* ==========================================================================
+   Mobile ergonomics: composer area
+   ========================================================================== */
+
+/*
+ * The composer (message input) is the primary interaction surface.
+ * On mobile it must be:
+ * - Bottom-anchored, above the keyboard
+ * - Full-width with comfortable padding
+ * - Send button large and thumb-reachable (right side)
+ * - Grow with content up to ~40% of viewport height
+ */
+@media (max-width: 768px) {
+  .composer-bar,
+  [data-slot='composer'] {
+    padding-left: max(0.75rem, var(--ios-safe-left)) !important;
+    padding-right: max(0.75rem, var(--ios-safe-right)) !important;
+    padding-bottom: calc(var(--ios-safe-bottom) + 0.5rem) !important;
+    /* Keyboard pushes the viewport up via visualViewport API (see JS layer) */
+    bottom: var(--ios-composer-offset) !important;
+  }
+
+  /* Input textarea: comfortable line-height for thumb typing */
+  .composer-bar textarea,
+  [data-slot='composer-input'] {
+    font-size: 16px !important; /* prevents iOS auto-zoom on focus */
+    line-height: 1.4 !important;
+    max-height: 35dvh !important;
+  }
+}
+
+/* ==========================================================================
+   Mobile ergonomics: message list
+   ========================================================================== */
+
+/*
+ * Chat messages should fill the space between the titlebar and composer.
+ * Add bottom padding so the last message isn't hidden behind the composer.
+ * User messages right-aligned, assistant left-aligned (already handled by
+ * the renderer, but we ensure full-width readability on mobile).
+ */
+@media (max-width: 768px) {
+  [data-slot='message-list'],
+  .message-list {
+    padding-bottom: 6rem !important; /* clear the composer */
+  }
+
+  /* Messages: full width with minimal horizontal padding */
+  [data-slot='message-content'] {
+    max-width: 100% !important;
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+}
+
+/* ==========================================================================
+   Mobile ergonomics: smooth scrolling
+   ========================================================================== */
+
+/*
+ * Momentum scrolling on all scrollable containers.
+ */
+[data-slot='message-list'],
+[data-slot='sidebar-content'],
+.scroll-container,
+.overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/*
+ * Prevent the rubber-band bounce on the message list — the app manages its
+ * own scroll boundaries.
+ */
+[data-slot='message-list'] {
+  overscroll-behavior: contain;
+}
+
+/* ==========================================================================
+   Mobile ergonomics: font sizes
+   ========================================================================== */
+
+/*
+ * iOS auto-inflates font sizes in some contexts. Lock the base size and
+ * ensure code blocks stay readable on small screens.
+ */
+@media (max-width: 768px) {
+  html {
+    font-size: 15px !important; /* slightly smaller than 16px default for density */
+  }
+
+  /* Code blocks: smaller but still readable, horizontal scroll */
+  pre,
+  code {
+    font-size: 13px !important;
+  }
+
+  /* Headings inside messages: reduce for mobile readability */
+  [data-slot='message-content'] h1 { font-size: 1.4rem !important; }
+  [data-slot='message-content'] h2 { font-size: 1.2rem !important; }
+  [data-slot='message-content'] h3 { font-size: 1.05rem !important; }
+}
+
+/* ==========================================================================
+   Mobile ergonomics: keyboard awareness
+   ========================================================================== */
+
+/*
+ * When the soft keyboard opens, iOS resizes the visualViewport but not the
+ * layout viewport. The JS layer (ios-gestures.ts) sets --ios-composer-offset
+ * to the keyboard height so the composer stays visible above it.
+ * This class is toggled by the keyboard detection in the gesture layer.
+ */
+body[data-ios-keyboard-open='true'] {
+  /* Shrink the message list to leave room for the keyboard + composer */
+  --ios-composer-offset: var(--keyboard-height, 0px);
+}
+
+body[data-ios-keyboard-open='true'] [data-slot='message-list'] {
+  height: calc(100dvh - var(--ios-safe-top) - var(--keyboard-height, 0px) - 5rem) !important;
 }
